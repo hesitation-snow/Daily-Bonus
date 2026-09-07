@@ -8,11 +8,11 @@ import os
 import time
 
 from datetime import datetime, timedelta, timezone
-from checkin import bilibili, netease, pica, uma, v2ex, yamibo, yurifans
+from checkin import bilibili, glados, netease, pica, uma, v2ex, yamibo, yurifans
 from telegram import Bot
 
 # info
-TG_USER_ID = os.environ.get("TG_USER_ID")
+TG_USER_ID = os.environ.get("TG_USER_ID") or os.environ.get("TG_CHAT_ID")
 TG_BOT_TOKEN = os.environ.get("TG_BOT_TOKEN")
 
 if __name__ == '__main__':
@@ -20,6 +20,8 @@ if __name__ == '__main__':
     utc_time = (datetime.now(timezone.utc) + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S")
     content_lst = []
 
+    if os.environ.get("GLADOS_COOKIE", "").strip():
+        content_lst.append(f"「GLaDOS」\n{glados.main()}")
     if os.environ.get("UMA_COOKIES"):
         content_lst.append(f"「賽馬娘每日簽到」\n{uma.main()}")
     if os.environ.get("YAMIBO_USERNAME") and os.environ.get("YAMIBO_PASSWORD"):
