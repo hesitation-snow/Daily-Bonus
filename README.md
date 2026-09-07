@@ -21,6 +21,7 @@
 | 赛马娘 | Cookie | 游戏内道具 + 积分 |
 | 哔咔漫画 | 账号密码 | 经验 |
 | 网易云音乐 | Cookie | 云贝签到 |
+| GLaDOS | Cookie | 签到积分及剩余天数查询 |
 | ~~FF14 商城~~ | ~~账号密码~~ | ~~积分~~ |
 
 > ⚠️ **FF14 商城签到已废弃**。SDO 登录接口接入了 Geetest 风控，脚本登录会触发滑块验证码，无法自动绕过。
@@ -109,6 +110,25 @@ Yamibo 启用了百度 WAF JS 挑战，curl_cffi 无法执行 JS 会返回 405�
 | TG_BOT_TOKEN | Bot Token，参考 [How Do I Create a Bot?](https://core.telegram.org/bots#how-do-i-create-a-bot) |
 | TG_USER_ID | 用户 ID，参考 [How can I send a message to someone with my telegram bot using their Username](https://stackoverflow.com/questions/41664810) |
 
+兼容 Auto_Checkin 的 `TG_CHAT_ID`；同时设置时优先使用 `TG_USER_ID`。
+
+### GLaDOS（整合 Auto_Checkin）
+
+| Name | Description |
+|------|-------------|
+| GLADOS_COOKIE | 必填，从已登录的 GLaDOS 浏览器请求中复制 Cookie |
+| GLADOS_EMAIL | 可选，仅用于在结果中标识账户 |
+
+未设置 `GLADOS_COOKIE` 时跳过。结果合并到 Daily-Bonus 的 Telegram 消息中；未配置 Telegram 时仍输出到运行日志。
+
+从 Auto_Checkin 迁移时，请在 **Daily-Bonus 仓库**重新添加 Secrets（GitHub 不会跨仓库共享 Secrets）。原项目使用 `production` 环境；本项目使用 repository secrets，请将值配置到仓库级别。
+
+GLaDOS 随 Daily-Bonus 于北京时间每天 **07:30** 执行，不再使用原项目的 16:00 调度。验证成功后，可停用旧 Auto_Checkin 工作流以避免重复签到。GitHub-hosted 与 self-hosted 两个工作流按需启用一个。
+
+可在 Actions 页面手动运行 Daily Bonus 验证，或本地执行 `uv run python integrations/auto_checkin/glados_checkin.py`。
+
+独立签到程序及其来源、修改说明和 GPLv3 许可证见 [integrations/auto_checkin](integrations/auto_checkin)。
+
 ### 赛马娘网页签到
 
 使用 Cookie 登录，需要 `site`、`joy_jct`、`DedeUserID`、`SESSDATA`
@@ -182,4 +202,4 @@ Yamibo 启用了百度 WAF JS 挑战，curl_cffi 无法执行 JS 会返回 405�
 
 ## 许可证
 
-[MIT](LICENSE)
+Daily-Bonus 原有代码及适配器使用 [MIT](LICENSE)。独立程序 `integrations/auto_checkin/glados_checkin.py` 使用其原项目的 [GPLv3](integrations/auto_checkin/LICENSE)，通过子进程调用。
