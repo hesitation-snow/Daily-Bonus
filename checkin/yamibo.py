@@ -56,6 +56,16 @@ def _browser_cookies():
     return cookies
 
 
+def _set_waf_cookie(cookie):
+    # A host-only and a domain cookie with the same name can both be sent.
+    # Replace all old Yamibo WAF cookies without touching login cookies.
+    for old in list(SESSION.cookies.jar):
+        if old.name == "nox_jst_v1" and old.domain.lstrip(".") in ("bbs.yamibo.com", "yamibo.com"):
+            SESSION.cookies.jar.clear(old.domain, old.path, old.name)
+    SESSION.cookies.set("nox_jst_v1", cookie["value"],
+                        domain=cookie["domain"], path=cookie.get("path", "/"))
+
+
 def solve_waf(url=None):
     """Wait for browser challenge cookies, then verify the HTTP session works."""
     try:
@@ -68,10 +78,18 @@ def solve_waf(url=None):
                 context = browser.new_context(user_agent=HEADERS["user-agent"])
                 context.add_cookies(_browser_cookies())
                 page = context.new_page()
+                document_status = None
+                def record_document(response):
+                    nonlocal document_status
+                    if response.request.is_navigation_request() and response.frame == page.main_frame:
+                        document_status = response.status
+                page.on("response", record_document)
                 # Ads and analytics may never go idle. Cookie creation can also
                 # happen after navigation, so neither event defines success.
                 try:
-                    page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                    navigation = page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                    if navigation is not None and isinstance(navigation.status, int):
+                        document_status = navigation.status
                 except PlaywrightTimeoutError:
                     pass  # The challenge may already be running in the page.
                 deadline = time.monotonic() + 30
@@ -81,14 +99,18 @@ def solve_waf(url=None):
                     nox_cookie = next((c for c in cookies if c["name"] == "nox_jst_v1" and c["value"]), None)
                     if nox_cookie and nox_cookie["value"] != last_cookie:
                         last_cookie = nox_cookie["value"]
-                        SESSION.cookies.set(
-                            "nox_jst_v1", last_cookie,
-                            domain=nox_cookie["domain"], path=nox_cookie.get("path", "/"),
-                        )
+                        _set_waf_cookie(nox_cookie)
                         if _verify_forum(url):
                             return True
                     page.wait_for_timeout(500)
-                msg.append({"name": "登录信息", "value": "WAF 挑战未通过：未获得可用通行 Cookie，请尝试可正常访问论坛的 self-hosted runner"})
+                browser_ready = _forum_ready(document_status, page.content())
+                status = document_status if document_status is not None else "未知"
+                cookie_state = "已生成" if last_cookie else "未生成"
+                page_state = "正常论坛页面" if browser_ready else "未确认正常页面"
+                msg.append({"name": "访问诊断", "value": (
+                    f"浏览器 HTTP {status}（{page_state}）；通行 Cookie {cookie_state}；HTTP 会话仍未通过。"
+                    "若浏览器页面正常，则可能是 Cookie/请求会话差异；若浏览器也被拒绝，请比较本地网页与 runner 访问。"
+                )})
             finally:
                 browser.close()
     except PlaywrightError:

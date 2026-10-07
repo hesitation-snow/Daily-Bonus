@@ -45,7 +45,7 @@ class YamiboWafTests(unittest.TestCase):
         context.cookies.return_value = [self.cookie]
         with patch.object(yamibo, 'sync_playwright', return_value=manager), patch.object(yamibo, '_verify_forum', return_value=False), patch.object(yamibo.time, 'monotonic', side_effect=[0, 1, 31]), patch.object(yamibo, 'SESSION'):
             self.assertFalse(yamibo.solve_waf())
-            self.assertIn('未获得可用通行 Cookie', yamibo.msg[-1]['value'])
+            self.assertIn('通行 Cookie 已生成', yamibo.msg[-1]['value'])
             browser.close.assert_called_once()
 
     def test_browser_failure_is_reported_and_browser_closed(self):
@@ -128,6 +128,28 @@ class YamiboWafTests(unittest.TestCase):
             self.assertEqual(page.goto.call_args.args[0], url)
             self.assertEqual(context.add_cookies.call_args.args[0][0]['value'], 'login-token')
             self.assertEqual(session.cookies.get('EeqY_2132_auth'), 'login-token')
+
+    def test_new_waf_cookie_removes_duplicate_old_domains_only(self):
+        session = yamibo.cffi_requests.Session()
+        session.cookies.set('nox_jst_v1', 'old-one', domain='bbs.yamibo.com')
+        session.cookies.set('nox_jst_v1', 'old-two', domain='.yamibo.com')
+        session.cookies.set('EeqY_2132_auth', 'login-token', domain='bbs.yamibo.com')
+        with patch.object(yamibo, 'SESSION', session):
+            yamibo._set_waf_cookie(self.cookie)
+            cookies = [c for c in session.cookies.jar if c.name == 'nox_jst_v1']
+            self.assertEqual(len(cookies), 1)
+            self.assertEqual(cookies[0].value, 'test-pass')
+            self.assertEqual(session.cookies.get('EeqY_2132_auth'), 'login-token')
+
+    def test_diagnostics_distinguish_browser_denial_from_cookie_failure(self):
+        manager, browser, context, page = self.browser()
+        page.goto.return_value = Mock(status=403)
+        page.content.return_value = '<html>Forbidden</html>'
+        context.cookies.return_value = []
+        with patch.object(yamibo, 'sync_playwright', return_value=manager), patch.object(yamibo, '_verify_forum', return_value=False), patch.object(yamibo.time, 'monotonic', side_effect=[0, 31]):
+            self.assertFalse(yamibo.solve_waf())
+            self.assertIn('浏览器 HTTP 403', yamibo.msg[-1]['value'])
+            self.assertIn('Cookie 未生成', yamibo.msg[-1]['value'])
 
 
 if __name__ == '__main__':
