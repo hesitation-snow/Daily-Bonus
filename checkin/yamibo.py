@@ -35,27 +35,43 @@ def _forum_ready(status, text):
     ))
 
 
-def _verify_forum():
+def _verify_forum(url=None):
     response = SESSION.get(
-        f"{BASE_URL}/forum.php", headers=HEADERS, impersonate="chrome", timeout=15,
+        url or f"{BASE_URL}/forum.php", headers=HEADERS, impersonate="chrome", timeout=15,
     )
     return _forum_ready(response.status_code, response.text)
 
 
-def solve_waf():
+def _browser_cookies():
+    """Keep the authenticated HTTP session when revisiting a challenged page."""
+    cookies = []
+    for cookie in SESSION.cookies.jar:
+        if cookie.domain.lstrip(".") not in ("bbs.yamibo.com", "yamibo.com"):
+            continue
+        if cookie.name == "nox_jst_v1" or cookie.is_expired():
+            continue
+        cookies.append({"name": cookie.name, "value": cookie.value,
+                        "domain": cookie.domain, "path": cookie.path or "/",
+                        "secure": cookie.secure})
+    return cookies
+
+
+def solve_waf(url=None):
     """Wait for browser challenge cookies, then verify the HTTP session works."""
     try:
-        if _verify_forum():
+        url = url or f"{BASE_URL}/forum.php"
+        if _verify_forum(url):
             return True
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
             try:
                 context = browser.new_context(user_agent=HEADERS["user-agent"])
+                context.add_cookies(_browser_cookies())
                 page = context.new_page()
                 # Ads and analytics may never go idle. Cookie creation can also
                 # happen after navigation, so neither event defines success.
                 try:
-                    page.goto(f"{BASE_URL}/forum.php", wait_until="domcontentloaded", timeout=30000)
+                    page.goto(url, wait_until="domcontentloaded", timeout=30000)
                 except PlaywrightTimeoutError:
                     pass  # The challenge may already be running in the page.
                 deadline = time.monotonic() + 30
@@ -69,7 +85,7 @@ def solve_waf():
                             "nox_jst_v1", last_cookie,
                             domain=nox_cookie["domain"], path=nox_cookie.get("path", "/"),
                         )
-                        if _verify_forum():
+                        if _verify_forum(url):
                             return True
                     page.wait_for_timeout(500)
                 msg.append({"name": "登录信息", "value": "WAF 挑战未通过：未获得可用通行 Cookie，请尝试可正常访问论坛的 self-hosted runner"})
@@ -154,29 +170,53 @@ def login():
         return False
 
 
+def _is_waf(response):
+    return any(marker in response.text for marker in ("window.__nox", "nox_202", "waf-jschallenge"))
+
+
+def _get_sign_response():
+    url = f"{BASE_URL}/plugin.php?id=zqlj_sign"
+    response = SESSION.get(url, headers=HEADERS, impersonate="chrome", timeout=15)
+    if _is_waf(response) and solve_waf(url):
+        # Recover only once, for this read-only page. Never replace auth cookies
+        # with cookies from a guest browser context.
+        response = SESSION.get(url, headers=HEADERS, impersonate="chrome", timeout=15)
+    return response
+
+
 def get_sign_page():
     """Fetch sign page.
 
     Returns (sign_hash, already_signed, page_text) or (None, None, None) if not logged in.
     """
-    url = f"{BASE_URL}/plugin.php?id=zqlj_sign"
-    r = SESSION.get(url, headers=HEADERS, impersonate="chrome")
+    r = _get_sign_response()
 
     global msg
-    if "需要先登录" in r.text:
+    if _is_waf(r) or r.status_code in (403, 405):
+        msg.append({"name": "签到信息", "value": f"签到页仍被 WAF 拦截（HTTP {r.status_code}），请检查 runner 网络"})
+        return None, None, None
+    if "需要先登录" in r.text or "请先登录" in r.text:
         msg.append({"name": "登录信息", "value": "登录失败，Cookie 可能已经失效"})
         return None, None, None
 
-    sign_match = re.search(r'sign=([a-f0-9]+)', r.text)
-    sign_hash = sign_match.group(1) if sign_match else None
-    btn_match = re.search(r'class="btna"[^>]*>([^<]+)<', r.text)
-    btn_text = btn_match.group(1).strip() if btn_match else ""
-
-    if not btn_text and "我的打卡动态" not in r.text:
-        msg.append({"name": "签到信息", "value": "页面被拦截，无法获取签到状态"})
+    if r.status_code != 200:
+        msg.append({"name": "签到信息", "value": f"签到页请求失败（HTTP {r.status_code}）"})
         return None, None, None
-
-    already_signed = "今日已打卡" in btn_text and "点击打卡" not in btn_text
+    tree = html.fromstring(r.text or "<html></html>")
+    sign_hash = None
+    for href in tree.xpath('//a/@href'):
+        if "zqlj_sign" not in href:
+            continue
+        match = re.search(r'(?:[?&])sign=([a-f0-9]+)(?:&|$)', href)
+        if match:
+            sign_hash = match.group(1)
+            break
+    buttons = tree.xpath('//*[contains(concat(" ", normalize-space(@class), " "), " btna ")]')
+    btn_text = " ".join(button.text_content().strip() for button in buttons)
+    already_signed = "今日已打卡" in btn_text or "今日已签到" in btn_text
+    if not already_signed and not sign_hash:
+        msg.append({"name": "签到信息", "value": "签到页已返回，但未识别到打卡链接或已打卡状态，页面结构可能已变更"})
+        return None, None, None
 
     return sign_hash, already_signed, r.text
 
@@ -253,7 +293,7 @@ def main():
 
     if not already_signed and sign_hash:
         check_in(sign_hash)
-        r2 = SESSION.get(f"{BASE_URL}/plugin.php?id=zqlj_sign", headers=HEADERS, impersonate="chrome")
+        r2 = _get_sign_response()
         page_text = r2.text
     else:
         msg.append({"name": "签到信息", "value": "今日已签到，无需重复签到"})
