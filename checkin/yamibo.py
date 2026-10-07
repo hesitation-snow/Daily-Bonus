@@ -5,10 +5,11 @@
 
 import os
 import re
+import time
 
 from curl_cffi import requests as cffi_requests
 from lxml import html
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import Error as PlaywrightError, TimeoutError as PlaywrightTimeoutError, sync_playwright
 
 # info
 USERNAME = os.environ.get("YAMIBO_USERNAME")
@@ -27,22 +28,57 @@ HEADERS = {
 }
 
 
-def solve_waf():
-    """Use Playwright to solve Baidu WAF JS challenge and return nox_jst_v1 cookie."""
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        context = browser.new_context(
-            user_agent=HEADERS["user-agent"],
-        )
-        page = context.new_page()
-        page.goto(f"{BASE_URL}/forum.php", wait_until="networkidle", timeout=30000)
-        cookies = context.cookies()
-        browser.close()
+def _forum_ready(status, text):
+    """Require a real Discuz page, not just a challenge cookie."""
+    return status == 200 and any(marker in text for marker in (
+        'id="nv_forum"', 'id="hd"', 'name="formhash"', 'Powered by Discuz!',
+    ))
 
-    nox_cookie = next((c for c in cookies if c["name"] == "nox_jst_v1"), None)
-    if nox_cookie:
-        SESSION.cookies.set("nox_jst_v1", nox_cookie["value"], domain="bbs.yamibo.com")
-        return True
+
+def _verify_forum():
+    response = SESSION.get(
+        f"{BASE_URL}/forum.php", headers=HEADERS, impersonate="chrome", timeout=15,
+    )
+    return _forum_ready(response.status_code, response.text)
+
+
+def solve_waf():
+    """Wait for browser challenge cookies, then verify the HTTP session works."""
+    try:
+        if _verify_forum():
+            return True
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            try:
+                context = browser.new_context(user_agent=HEADERS["user-agent"])
+                page = context.new_page()
+                # Ads and analytics may never go idle. Cookie creation can also
+                # happen after navigation, so neither event defines success.
+                try:
+                    page.goto(f"{BASE_URL}/forum.php", wait_until="domcontentloaded", timeout=30000)
+                except PlaywrightTimeoutError:
+                    pass  # The challenge may already be running in the page.
+                deadline = time.monotonic() + 30
+                last_cookie = None
+                while time.monotonic() < deadline:
+                    cookies = context.cookies([BASE_URL])
+                    nox_cookie = next((c for c in cookies if c["name"] == "nox_jst_v1" and c["value"]), None)
+                    if nox_cookie and nox_cookie["value"] != last_cookie:
+                        last_cookie = nox_cookie["value"]
+                        SESSION.cookies.set(
+                            "nox_jst_v1", last_cookie,
+                            domain=nox_cookie["domain"], path=nox_cookie.get("path", "/"),
+                        )
+                        if _verify_forum():
+                            return True
+                    page.wait_for_timeout(500)
+                msg.append({"name": "登录信息", "value": "WAF 挑战未通过：未获得可用通行 Cookie，请尝试可正常访问论坛的 self-hosted runner"})
+            finally:
+                browser.close()
+    except PlaywrightError:
+        msg.append({"name": "登录信息", "value": "WAF 浏览器运行失败，请检查 Chromium 安装和 runner 网络"})
+    except cffi_requests.RequestsError:
+        msg.append({"name": "登录信息", "value": "论坛连接失败，请检查 runner 网络"})
     return False
 
 
@@ -51,7 +87,6 @@ def login():
     global msg
 
     if not solve_waf():
-        msg.append({"name": "登录信息", "value": "WAF 挑战失败"})
         return False
 
     # Step 1: GET login page to extract formhash and loginhash
@@ -205,6 +240,7 @@ def query_stats(page_text):
 
 def main():
     global msg
+    msg = []
     if not USERNAME or not PASSWORD:
         return "No YAMIBO_USERNAME or YAMIBO_PASSWORD set"
 

@@ -95,6 +95,10 @@ docker run -d \
 
 Yamibo 启用了百度 WAF JS 挑战，curl_cffi 无法执行 JS 会返回 405。脚本通过 Playwright 启动 headless Chromium 解决挑战并提取 `nox_jst_v1` cookie。GitHub-hosted runner 已内置 Playwright 浏览器安装步骤；self-hosted runner 需确保 Docker 容器内有 Chromium 运行依赖。
 
+**Yamibo 提示「WAF 挑战未通过」或「WAF 浏览器运行失败」**
+
+脚本先检查论坛能否直接访问；遇到挑战时最多等待 30 秒获取通行 Cookie，并用实际 HTTP 会话确认论坛页面可访问。不会仅凭 Cookie 存在就认为通过，也不依赖广告等资源全部加载完毕。若仍未通过，请确认 runner 网络能访问论坛，可改用可正常访问论坛的 self-hosted runner。浏览器运行失败时检查工作流的 `playwright install chromium --with-deps` 是否成功；此错误发生在账号登录前，无需先更改账号密码。
+
 **签到失败**
 
 在 Actions 页面点击 `Re-run` 重新运行即可。Cookie 可能过期，重新获取后更新 Secrets。
