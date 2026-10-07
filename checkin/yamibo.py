@@ -28,6 +28,24 @@ HEADERS = {
 }
 
 
+def _authenticated_formhash(text):
+    # formhash also exists on guest pages. Never use it without a logged-in UID.
+    uid = re.search(r"\bdiscuz_uid\s*=\s*['\"]?(\d+)", text)
+    if not uid or int(uid.group(1)) == 0:
+        return None
+    tree = html.fromstring(text or "<html></html>")
+    tokens = tree.xpath('//input[@name="formhash"]/@value')
+    return next((value for value in tokens if re.fullmatch(r'[a-f0-9]+', value)), None)
+
+
+def get_account_page():
+    response = SESSION.get(f"{BASE_URL}/forum.php", headers=HEADERS,
+                           impersonate="chrome", timeout=15)
+    if response.status_code != 200 or _is_waf(response):
+        return None, None
+    return _authenticated_formhash(response.text), response.text
+
+
 def _forum_ready(status, text):
     """Require a real Discuz page, not just a challenge cookie."""
     return status == 200 and any(marker in text for marker in (
@@ -179,7 +197,12 @@ def login():
         impersonate="chrome",
     )
 
-    if "succeedhandle" in r2.text or "succeed" in r2.text:
+    # A callback name alone is not proof that the session is authenticated.
+    if r2.status_code == 200 and ("succeedhandle" in r2.text or "succeed" in r2.text):
+        token, _ = get_account_page()
+        if not token:
+            msg.append({"name": "登录信息", "value": "登录返回成功提示，但未确认已登录用户，请检查登录会话或论坛响应"})
+            return False
         msg.append({"name": "登录信息", "value": "登录成功"})
         return True
     elif "登录失败" in r2.text:
@@ -249,13 +272,22 @@ def get_sign_page():
 def check_in(sign_hash):
     """Perform sign-in by visiting the sign URL with the one-time hash."""
     url = f"{BASE_URL}/plugin.php?id=zqlj_sign&sign={sign_hash}"
-    r = SESSION.get(url, headers=HEADERS, impersonate="chrome")
+    r = SESSION.get(url, headers=HEADERS, impersonate="chrome", timeout=15)
 
     global msg
-    if "打卡成功" in r.text:
+    if r.status_code != 200 or _is_waf(r):
+        msg.append({"name": "签到信息", "value": f"签到请求被拒绝或返回挑战（HTTP {r.status_code}），尚未确认签到成功"})
+        return False, r.text
+    tree = html.fromstring(r.text or "<html></html>")
+    result_nodes = tree.xpath('//*[contains(concat(" ", normalize-space(@class), " "), " jump_c ")]//p | //*[@id="messagetext"]//p')
+    result_text = " ".join(node.text_content() for node in result_nodes) if result_nodes else tree.text_content()
+    if "需要先登录" in result_text or "请先登录" in result_text:
+        msg.append({"name": "签到信息", "value": "登录失败，Cookie 可能已经失效"})
+        return False, r.text
+    if "打卡成功" in result_text or "签到成功" in result_text or (result_nodes and "成功！" in result_text):
         msg.append({"name": "签到信息", "value": "签到成功"})
         return True, r.text
-    elif "打过卡" in r.text:
+    elif "打过卡" in result_text or "今日已签到" in result_text:
         msg.append({"name": "签到信息", "value": "今日已签到"})
         return True, r.text
     elif "需要先登录" in r.text:
@@ -310,6 +342,23 @@ def main():
         return "No YAMIBO_USERNAME or YAMIBO_PASSWORD set"
 
     if not login():
+        return "\n".join([f"{one.get('name')}: {one.get('value')}" for one in msg])
+
+    token, _ = get_account_page()
+    if token:
+        # The sign action takes the current user's formhash. The calendar page
+        # is optional and must not prevent the action from being attempted.
+        success, result_text = check_in(token)
+        if success:
+            try:
+                response = SESSION.get(f"{BASE_URL}/plugin.php?id=zqlj_sign", headers=HEADERS,
+                                       impersonate="chrome", timeout=15)
+                if response.status_code == 200 and not _is_waf(response):
+                    query_stats(response.text)
+                else:
+                    msg.append({"name": "统计信息", "value": "签到结果已确认，统计页面暂不可访问"})
+            except cffi_requests.RequestsError:
+                msg.append({"name": "统计信息", "value": "签到结果已确认，统计查询连接失败"})
         return "\n".join([f"{one.get('name')}: {one.get('value')}" for one in msg])
 
     sign_hash, already_signed, page_text = get_sign_page()

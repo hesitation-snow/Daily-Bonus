@@ -151,6 +151,43 @@ class YamiboWafTests(unittest.TestCase):
             self.assertIn('浏览器 HTTP 403', yamibo.msg[-1]['value'])
             self.assertIn('Cookie 未生成', yamibo.msg[-1]['value'])
 
+    def test_formhash_requires_authenticated_uid(self):
+        page = '<script>var discuz_uid = "42";</script><input value="abc123" name="formhash">'
+        self.assertEqual(yamibo._authenticated_formhash(page), 'abc123')
+        self.assertIsNone(yamibo._authenticated_formhash(page.replace('"42"', '"0"')))
+        self.assertIsNone(yamibo._authenticated_formhash('<input name="formhash" value="abc123">'))
+
+    def test_direct_sign_does_not_require_calendar_page(self):
+        with patch.object(yamibo, 'USERNAME', 'test'), patch.object(yamibo, 'PASSWORD', 'test'), patch.object(yamibo, 'login', return_value=True), patch.object(yamibo, 'get_account_page', return_value=('abc123', 'account-page')), patch.object(yamibo, 'check_in', return_value=(True, 'result')) as sign, patch.object(yamibo, 'get_sign_page') as calendar, patch.object(yamibo, 'SESSION') as session:
+            session.get.return_value = Mock(status_code=403, text='Forbidden')
+            output = yamibo.main()
+            sign.assert_called_once_with('abc123')
+            calendar.assert_not_called()
+            self.assertIn('签到结果已确认', output)
+
+    def test_real_prompt_success_and_already_signed(self):
+        for body, expected in (
+            ('<div class="jump_c"><p>成功！奖励对象 1 个。</p></div>', '签到成功'),
+            ('<div id="messagetext"><p>您今天已经打过卡了。</p></div>', '今日已签到'),
+        ):
+            yamibo.msg = []
+            with patch.object(yamibo, 'SESSION') as session:
+                session.get.return_value = Mock(status_code=200, text=body)
+                self.assertTrue(yamibo.check_in('abc123')[0])
+                self.assertIn(expected, yamibo.msg[-1]['value'])
+
+    def test_action_403_never_counts_as_success(self):
+        with patch.object(yamibo, 'SESSION') as session:
+            session.get.return_value = Mock(status_code=403, text='<p>打卡成功</p>')
+            self.assertFalse(yamibo.check_in('abc123')[0])
+
+    def test_login_callback_without_authenticated_session_is_rejected(self):
+        with patch.object(yamibo, 'solve_waf', return_value=True), patch.object(yamibo, 'get_account_page', return_value=(None, None)), patch.object(yamibo, 'SESSION') as session:
+            session.get.return_value = Mock(status_code=200, text='<input name="formhash" value="abc123">')
+            session.post.return_value = Mock(status_code=200, text='succeedhandle_login')
+            self.assertFalse(yamibo.login())
+            self.assertIn('未确认已登录用户', yamibo.msg[-1]['value'])
+
 
 if __name__ == '__main__':
     unittest.main()
