@@ -181,6 +181,18 @@ class YamiboWafTests(unittest.TestCase):
             session.get.return_value = Mock(status_code=403, text='<p>打卡成功</p>')
             self.assertFalse(yamibo.check_in('abc123')[0])
 
+    def test_denial_classification_excludes_response_secrets(self):
+        for body, label in (
+            ('<script>window.__noxExpire=30</script>', 'NOX/WAF'),
+            ('<html>cf-chl challenge</html>', 'Cloudflare'),
+            ('<p>您所在的用户组没有权限</p>', '论坛权限'),
+            ('<html>Forbidden</html>', '通用访问拒绝'),
+            ('<p>需要先登录</p>', '重新登录'),
+        ):
+            result = yamibo._denial_reason(Mock(text=body+'private-session-token'))
+            self.assertIn(label, result)
+            self.assertNotIn('private-session-token', result)
+
     def test_login_callback_without_authenticated_session_is_rejected(self):
         with patch.object(yamibo, 'solve_waf', return_value=True), patch.object(yamibo, 'get_account_page', return_value=(None, None)), patch.object(yamibo, 'SESSION') as session:
             session.get.return_value = Mock(status_code=200, text='<input name="formhash" value="abc123">')

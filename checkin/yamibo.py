@@ -219,6 +219,24 @@ def _is_waf(response):
     return any(marker in response.text for marker in ("window.__nox", "nox_202", "waf-jschallenge"))
 
 
+def _denial_reason(response):
+    """Classify the denial without logging HTML, tokens, cookies or account data."""
+    body = response.text.lower()
+    if _is_waf(response):
+        kind = "NOX/WAF 挑战页面"
+    elif any(marker in body for marker in ("cf-chl", "cloudflare", "just a moment", "verify you are human")):
+        kind = "Cloudflare 访问检查页面"
+    elif any(marker in body for marker in ("您所在的用户组", "您所在用户组", "没有权限", "无权访问", "无权进行", "权限不足")):
+        kind = "论坛权限提示页面"
+    elif "请先登录" in body or "需要先登录" in body:
+        kind = "论坛要求重新登录"
+    elif "forbidden" in body or "access denied" in body:
+        kind = "通用访问拒绝页面"
+    else:
+        kind = "未识别的拒绝页面"
+    return f"拒绝类型: {kind}；响应长度: {len(response.text)} 字符"
+
+
 def _get_sign_response():
     url = f"{BASE_URL}/plugin.php?id=zqlj_sign"
     response = SESSION.get(url, headers=HEADERS, impersonate="chrome", timeout=15)
@@ -277,6 +295,7 @@ def check_in(sign_hash):
     global msg
     if r.status_code != 200 or _is_waf(r):
         msg.append({"name": "签到信息", "value": f"签到请求被拒绝或返回挑战（HTTP {r.status_code}），尚未确认签到成功"})
+        msg.append({"name": "拒绝诊断", "value": _denial_reason(r)})
         return False, r.text
     tree = html.fromstring(r.text or "<html></html>")
     result_nodes = tree.xpath('//*[contains(concat(" ", normalize-space(@class), " "), " jump_c ")]//p | //*[@id="messagetext"]//p')
