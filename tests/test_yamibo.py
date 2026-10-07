@@ -61,6 +61,56 @@ class YamiboWafTests(unittest.TestCase):
         for status, text in [(405, '<script>nox</script>'), (200, '<html>Access denied</html>'), (403, 'Powered by Discuz!')]:
             self.assertFalse(yamibo._forum_ready(status, text))
 
+    def test_signed_page_challenge_recovers_target_once(self):
+        challenge = Mock(status_code=405, text='<script>window.__noxExpire=30</script>')
+        normal = Mock(status_code=200, text='<a class="btna primary" href="plugin.php?id=zqlj_sign&amp;sign=abc123"><span>点击打卡</span></a>')
+        with patch.object(yamibo, 'SESSION') as session, patch.object(yamibo, 'solve_waf', return_value=True) as recover:
+            session.get.side_effect = [challenge, normal]
+            self.assertEqual(yamibo.get_sign_page()[:2], ('abc123', False))
+            recover.assert_called_once_with(f'{yamibo.BASE_URL}/plugin.php?id=zqlj_sign')
+            self.assertEqual(session.get.call_count, 2)
+
+    def test_repeated_waf_does_not_loop_or_claim_signed(self):
+        challenge = Mock(status_code=405, text='<script>window.__noxExpire=30</script>')
+        with patch.object(yamibo, 'SESSION') as session, patch.object(yamibo, 'solve_waf', return_value=True) as recover:
+            session.get.return_value = challenge
+            self.assertEqual(yamibo.get_sign_page(), (None, None, None))
+            recover.assert_called_once()
+            self.assertIn('HTTP 405', yamibo.msg[-1]['value'])
+
+    def test_nested_multiclass_signed_button(self):
+        normal = Mock(status_code=200, text="<a class='extra btna'><span>今日已打卡</span></a>")
+        with patch.object(yamibo, '_get_sign_response', return_value=normal):
+            self.assertEqual(yamibo.get_sign_page()[:2], (None, True))
+
+    def test_unknown_markup_is_not_waf_or_already_signed(self):
+        normal = Mock(status_code=200, text='<html>我的打卡动态</html>')
+        with patch.object(yamibo, '_get_sign_response', return_value=normal):
+            self.assertEqual(yamibo.get_sign_page(), (None, None, None))
+            self.assertIn('页面结构', yamibo.msg[-1]['value'])
+
+    def test_auth_cookies_seed_browser_but_other_domains_do_not(self):
+        session = yamibo.cffi_requests.Session()
+        session.cookies.set('EeqY_2132_auth', 'login-token', domain='bbs.yamibo.com')
+        session.cookies.set('nox_jst_v1', 'old-waf', domain='bbs.yamibo.com')
+        session.cookies.set('unrelated', 'private', domain='example.com')
+        with patch.object(yamibo, 'SESSION', session):
+            cookies = yamibo._browser_cookies()
+            self.assertEqual([c['name'] for c in cookies], ['EeqY_2132_auth'])
+            self.assertEqual(cookies[0]['value'], 'login-token')
+
+    def test_target_browser_preserves_auth_and_only_imports_waf(self):
+        manager, browser, context, page = self.browser()
+        context.cookies.return_value = [self.cookie, {'name': 'EeqY_2132_auth', 'value': 'guest'}]
+        session = yamibo.cffi_requests.Session()
+        session.cookies.set('EeqY_2132_auth', 'login-token', domain='bbs.yamibo.com')
+        url = f'{yamibo.BASE_URL}/plugin.php?id=zqlj_sign'
+        with patch.object(yamibo, 'SESSION', session), patch.object(yamibo, 'sync_playwright', return_value=manager), patch.object(yamibo, '_verify_forum', side_effect=[False, True]):
+            self.assertTrue(yamibo.solve_waf(url))
+            self.assertEqual(page.goto.call_args.args[0], url)
+            self.assertEqual(context.add_cookies.call_args.args[0][0]['value'], 'login-token')
+            self.assertEqual(session.cookies.get('EeqY_2132_auth'), 'login-token')
+
 
 if __name__ == '__main__':
     unittest.main()
