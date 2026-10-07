@@ -15,7 +15,8 @@ def main():
     env = {key: value for key, value in os.environ.items()
            if key in {"PATH", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "HOME",
                       "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "HTTPS_PROXY", "HTTP_PROXY",
-                      "ALL_PROXY", "NO_PROXY", "GLADOS_COOKIE", "GLADOS_EMAIL"}}
+                      "ALL_PROXY", "NO_PROXY", "GLADOS_COOKIE", "GLADOS_EMAIL",
+                      "GLADOS_USER_AGENT"}}
     env["PYTHONIOENCODING"] = "utf-8"
     try:
         result = subprocess.run(

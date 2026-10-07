@@ -22,6 +22,7 @@ jobs:
       NETEASE_MUSIC_COOKIES: ${{ secrets.NETEASE_MUSIC_COOKIES }}
       GLADOS_COOKIE: ${{ secrets.GLADOS_COOKIE }}
       GLADOS_EMAIL: ${{ secrets.GLADOS_EMAIL }}
+      GLADOS_USER_AGENT: ${{ secrets.GLADOS_USER_AGENT || vars.GLADOS_USER_AGENT }}
       TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
       TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
       TG_USER_ID: ${{ secrets.TG_USER_ID }}

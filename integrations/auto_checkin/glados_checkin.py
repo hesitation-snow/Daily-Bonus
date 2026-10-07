@@ -1,12 +1,14 @@
 # SPDX-License-Identifier: GPL-3.0-only
 # Adapted from hesitation-snow/Auto_Checkin, ee679fab00f3c17d7386ff0616b26211de0c5422
 # Modified 2026-09-07: stdout reporting, optional email, response validation.
+# Modified 2026-10-07: stable browser identity and current authentication/results.
 import os
 import random
+import re
 import time
 import requests
 import datetime
-from typing import Tuple, Optional
+from typing import Tuple
 
 class GLaDOSChecker:
     API_BASE = "https://glados.cloud/api/user"
@@ -17,6 +19,10 @@ class GLaDOSChecker:
         self._validate_env()
         self.email = os.environ.get("GLADOS_EMAIL", "")
         self.cookie = os.environ["GLADOS_COOKIE"]
+        self.user_agent = os.environ.get("GLADOS_USER_AGENT", "").strip() or (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+        )
 
     def _validate_env(self):
         required = {"GLADOS_COOKIE"}
@@ -32,10 +38,7 @@ class GLaDOSChecker:
         return {
             "Accept": "application/json",
             "Cookie": self.cookie,
-            "User-Agent": random.choice([
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15"
-            ]),
+            "User-Agent": self.user_agent,
             "Content-Type": "application/json;charset=UTF-8",
             "Origin": "https://glados.cloud"
         }
@@ -58,6 +61,9 @@ class GLaDOSChecker:
             )
             resp.raise_for_status()
             data = self._parse_response(resp)
+            auth_error = self._auth_error(data)
+            if auth_error:
+                return False, auth_error
             if data.get("code") != 0:
                 return False, "状态查询失败，请检查 Cookie ❌"
             days = float(data["data"]["leftDays"])
@@ -75,16 +81,38 @@ class GLaDOSChecker:
             )
             resp.raise_for_status()
             data = self._parse_response(resp)
+            auth_error = self._auth_error(data)
+            if auth_error:
+                return False, auth_error
+            # A success-looking message must not override a server rejection.
+            if data.get("code") not in (None, 0, 1):
+                return False, f"签到失败（业务码 {data.get('code')}）: {data.get('message', '')} ❌"
             return self._handle_checkin_result(data.get("message", ""))
         except Exception as e:
             return False, f"签到失败 ({type(e).__name__}) ❌"
 
+    @staticmethod
+    def _auth_error(data: dict) -> str:
+        detail = f"{data.get('message', '')} {data.get('reason', '')}".lower()
+        if "automated check-in detected" in detail or "device-mismatch" in detail:
+            return (
+                "浏览器身份校验失败 ❌：请在浏览器退出后重新登录，更新 GLADOS_COOKIE "
+                "和同一浏览器的 GLADOS_USER_AGENT；代码更新不会刷新登录信息。"
+            )
+        if "没有权限" in detail or "not logged in" in detail or "please sign in again" in detail:
+            return "登录会话失效 ❌：请重新登录后更新完整 GLADOS_COOKIE（包括 gld:sess 和 gld:sess.sig）。"
+        return ""
+
     def _handle_checkin_result(self, msg: str) -> Tuple[bool, str]:
+        if not isinstance(msg, str):
+            return False, "签到接口返回无效消息 ❌"
         if "Please Try Tomorrow" in msg:
             return True, "今日已签到，请明天再试 ⏳"
-        if "Got " in msg:
-            points = msg.split("Got ")[1].split(" ")[0]
-            return True, f"获得 {points} 积分 🎉"
+        if "Today's observation logged" in msg or msg.strip() == "Checkin!":
+            return True, "签到成功 🎉"
+        reward = re.search(r"\bGot (\d+(?:\.\d+)?)\b", msg)
+        if reward:
+            return True, f"获得 {reward.group(1)} 积分 🎉"
         return False, f"未知响应: {msg} ❓"
 
     def send_notification(self, status: str, checkin_result: str):
