@@ -177,7 +177,7 @@ def _is_waf(response):
 def _get_sign_response():
     url = f"{BASE_URL}/plugin.php?id=zqlj_sign"
     response = SESSION.get(url, headers=HEADERS, impersonate="chrome", timeout=15)
-    if _is_waf(response) and solve_waf(url):
+    if (_is_waf(response) or response.status_code in (403, 405)) and solve_waf(url):
         # Recover only once, for this read-only page. Never replace auth cookies
         # with cookies from a guest browser context.
         response = SESSION.get(url, headers=HEADERS, impersonate="chrome", timeout=15)
@@ -192,8 +192,11 @@ def get_sign_page():
     r = _get_sign_response()
 
     global msg
-    if _is_waf(r) or r.status_code in (403, 405):
-        msg.append({"name": "签到信息", "value": f"签到页仍被 WAF 拦截（HTTP {r.status_code}），请检查 runner 网络"})
+    if _is_waf(r):
+        msg.append({"name": "签到信息", "value": f"签到页仍返回 WAF 挑战（HTTP {r.status_code}）"})
+        return None, None, None
+    if r.status_code in (403, 405):
+        msg.append({"name": "签到信息", "value": f"签到页访问被拒绝（HTTP {r.status_code}），可能是访问策略或账号权限限制，不能仅凭状态码确定是 WAF"})
         return None, None, None
     if "需要先登录" in r.text or "请先登录" in r.text:
         msg.append({"name": "登录信息", "value": "登录失败，Cookie 可能已经失效"})

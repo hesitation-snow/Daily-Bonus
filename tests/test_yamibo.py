@@ -78,6 +78,24 @@ class YamiboWafTests(unittest.TestCase):
             recover.assert_called_once()
             self.assertIn('HTTP 405', yamibo.msg[-1]['value'])
 
+    def test_bare_403_triggers_one_recovery(self):
+        denied = Mock(status_code=403, text='<html>Forbidden</html>')
+        normal = Mock(status_code=200, text='<a href="plugin.php?id=zqlj_sign&amp;sign=abc123">点击打卡</a>')
+        with patch.object(yamibo, 'SESSION') as session, patch.object(yamibo, 'solve_waf', return_value=True) as recover:
+            session.get.side_effect = [denied, normal]
+            self.assertEqual(yamibo.get_sign_page()[:2], ('abc123', False))
+            recover.assert_called_once_with(f'{yamibo.BASE_URL}/plugin.php?id=zqlj_sign')
+            self.assertEqual(session.get.call_count, 2)
+
+    def test_persistent_bare_403_is_not_mislabeled_as_waf(self):
+        denied = Mock(status_code=403, text='<html>Forbidden</html>')
+        with patch.object(yamibo, 'SESSION') as session, patch.object(yamibo, 'solve_waf', return_value=True) as recover:
+            session.get.return_value = denied
+            self.assertEqual(yamibo.get_sign_page(), (None, None, None))
+            recover.assert_called_once()
+            self.assertIn('访问被拒绝', yamibo.msg[-1]['value'])
+            self.assertNotIn('仍被 WAF 拦截', yamibo.msg[-1]['value'])
+
     def test_nested_multiclass_signed_button(self):
         normal = Mock(status_code=200, text="<a class='extra btna'><span>今日已打卡</span></a>")
         with patch.object(yamibo, '_get_sign_response', return_value=normal):
