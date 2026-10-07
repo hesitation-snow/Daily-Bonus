@@ -118,6 +118,11 @@ Yamibo 启用了百度 WAF JS 挑战，curl_cffi 无法执行 JS 会返回 405�
 |------|-------------|
 | GLADOS_COOKIE | 必填，从已登录的 GLaDOS 浏览器请求中复制 Cookie |
 | GLADOS_EMAIL | 可选，仅用于在结果中标识账户 |
+| GLADOS_USER_AGENT | 获取 Cookie 时同一浏览器的完整 User-Agent；新版设备校验需要匹配，可设为 Actions Secret 或 Variable（Secret 优先） |
+
+如果出现 `Automated check-in detected` / `device-mismatch`，请在浏览器退出后重新登录 GLaDOS，再从开发者工具 Network 中复制当前请求的完整 `Cookie` 和 `User-Agent`。用 Cookie 请求头的值整体替换 `GLADOS_COOKIE`（不包含 `Cookie:` 前缀），通常包括 `gld:sess` 与 `gld:sess.sig`；不要混合新旧 Cookie。将同一请求的 User-Agent 值填入 `GLADOS_USER_AGENT`，Chrome 也可在 `chrome://version` 查看。不要把 Cookie 发到 Issue 或聊天中。
+
+更新代码后仍需手动更新这两个配置，再运行 Daily Bonus 验证；浏览器升级后如再次校验失败，请重新登录并一起更新 Cookie 和 User-Agent。未设置 User-Agent 时使用固定的默认值，不能保证匹配当前会话。如匹配后仍被拒绝，请先确认网页能手动签到，站点仍可能限制自动请求。
 
 未设置 `GLADOS_COOKIE` 时跳过。结果合并到 Daily-Bonus 的 Telegram 消息中；未配置 Telegram 时仍输出到运行日志。
 

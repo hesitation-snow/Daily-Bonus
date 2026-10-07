@@ -12,4 +12,11 @@ an already-completed check-in as such.
 
 Daily-Bonus invokes this as a standalone process and includes the resulting
 plain text in its existing notification. It requires only GLADOS_COOKIE;
-GLADOS_EMAIL is optional. The existing requests dependency is sufficient.
+GLADOS_EMAIL is optional. Set GLADOS_USER_AGENT to the exact browser identity
+used to obtain the current Cookie when device verification is required.
+The existing requests dependency is sufficient.
+
+Modified on 2026-10-07 to stop randomizing browser identity, pass the configured
+User-Agent, report actionable authentication errors, and recognize current
+successful check-in messages. Updated Cookie/UA configuration is still needed;
+the program cannot refresh the user's browser login.
